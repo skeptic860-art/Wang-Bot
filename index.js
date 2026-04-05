@@ -1,125 +1,115 @@
-require('dotenv').config();
-const { Client, GatewayIntentBits, Collection } = require('discord.js');
-const fs = require('fs');
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+from flask import Flask
+from threading import Thread
+import discord
+from discord import app_commands
+import os, random, json
+from datetime import datetime
 
-const DATA_FILE = './data.json';
+app = Flask('')
 
-// ====== Data helpers ======
-function loadData() {
-  if (!fs.existsSync(DATA_FILE)) return {};
-  return JSON.parse(fs.readFileSync(DATA_FILE));
-}
-function saveData(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
-function getUser(id) {
-  const data = loadData();
-  if (!data[id]) {
-    data[id] = {
-      gold: 100,
-      xp: 0,
-      level: 1,
-      inventory: [],
-      weapon: null,
-      lastDaily: 0
-    };
-    saveData(data);
-  }
-  return data[id];
-}
+@app.route('/')
+@app.route('/health')
+def home():
+    return {"wang_bot": "🟢 24/7 ONLINE!", "players": len(user_data) if 'user_data' in globals() else 0}
 
-// ====== Commands ======
-client.commands = new Collection();
+def run_flask():
+    app.run(host='0.0.0.0', port=3000)
 
-client.commands.set('start', {
-  description: 'Start your RPG journey',
-  execute: async (interaction) => {
-    getUser(interaction.user.id); // init user
-    await interaction.reply('✅ Your RPG journey started! You have 100 gold.');
-  }
-});
+Thread(target=run_flask).start()
 
-client.commands.set('daily', {
-  description: 'Claim daily reward',
-  execute: async (interaction) => {
-    const user = getUser(interaction.user.id);
-    const now = Date.now();
-    if (now - user.lastDaily < 24*60*60*1000) {
-      await interaction.reply('⏳ You already claimed your daily reward today.');
-      return;
-    }
-    const gold = Math.floor(Math.random() * 100) + 50;
-    user.gold += gold;
-    user.lastDaily = now;
-    saveData(loadData());
-    await interaction.reply(`💰 You got ${gold} gold!`);
-  }
-});
+# === WANG BOT RPG ===
+USER_DATA_FILE = "users.json"
+user_data = {}
 
-client.commands.set('hunt', {
-  description: 'Go hunting!',
-  execute: async (interaction) => {
-    const user = getUser(interaction.user.id);
-    const monsters = ['🐺 Wolf','🧟 Zombie','🦇 Bat','🐉 Dragon'];
-    const monster = monsters[Math.floor(Math.random() * monsters.length)];
-    const gold = Math.floor(Math.random() * 50) + 10;
-    const xp = Math.floor(Math.random() * 20) + 5;
+def load_data():
+    global user_data
+    try:
+        if os.path.exists(USER_DATA_FILE):
+            with open(USER_DATA_FILE, 'r') as f:
+                user_data = json.load(f)
+    except: pass
 
-    user.gold += gold;
-    user.xp += xp;
+def save_data():
+    with open(USER_DATA_FILE, 'w') as f:
+        json.dump(user_data, f)
 
-    if (user.xp >= user.level * 100) {
-      user.xp = 0;
-      user.level += 1;
-    }
+load_data()
 
-    saveData(loadData());
+def init_player(user_id):
+    if user_id not in user_data:
+        user_data[user_id] = {"level":1,"xp":0,"bones":100,"daily_last":0,"hunt_last":0,"pets":["🐕 Good Doggo"]}
+        save_data()
 
-    await interaction.reply(`⚔️ You defeated ${monster}!\n💰 +${gold} gold\n⭐ +${xp} XP`);
-  }
-});
+intents = discord.Intents.default()
+bot = discord.Client(intents=intents)
+tree = app_commands.CommandTree(bot)
 
-client.commands.set('equip', {
-  description: 'Equip a weapon',
-  execute: async (interaction) => {
-    const user = getUser(interaction.user.id);
-    if (user.inventory.length === 0) {
-      await interaction.reply('❌ You have no items to equip.');
-      return;
-    }
-    user.weapon = user.inventory[0]; // example: equip first item
-    saveData(loadData());
-    await interaction.reply(`⚔️ You equipped ${user.weapon}`);
-  }
-});
+@bot.event
+async def on_ready():
+    await tree.sync()
+    print(f'🐕 Wang Bot LIVE as {bot.user}!')
 
-client.commands.set('inventory', {
-  description: 'Check your inventory',
-  execute: async (interaction) => {
-    const user = getUser(interaction.user.id);
-    const inv = user.inventory.length ? user.inventory.join(', ') : 'Empty';
-    await interaction.reply(`🎒 Inventory: ${inv}`);
-  }
-});
+@tree.command(name="start", description="🐕 Start Wang Adventure!")
+async def start(interaction: discord.Interaction):
+    init_player(str(interaction.user.id))
+    embed = discord.Embed(title="🐾 Welcome!", description="💰 100 Bones\n🐕 Good Doggo\n⚔️ Level 1", color=0xffa500)
+    await interaction.response.send_message(embed=embed)
 
-// ====== Ready ======
-client.once('ready', () => {
-  console.log(`${client.user.tag} is online!`);
-});
+@tree.command(name="daily", description="💰 Daily bones!")
+async def daily(interaction: discord.Interaction):
+    uid = str(interaction.user.id)
+    init_player(uid)
+    now = datetime.now().timestamp()
+    if now - user_data[uid]["daily_last"] < 86400:
+        await interaction.response.send_message("⏰ Wait 24h!")
+        return
+    reward = random.randint(50,150)
+    user_data[uid]["bones"] += reward
+    user_data[uid]["daily_last"] = now
+    save_data()
+    await interaction.response.send_message(f"🎁 +{reward} bones!")
 
-// ====== Interaction ======
-client.on('interactionCreate', async interaction => {
-  if (!interaction.isChatInputCommand()) return;
-  const command = client.commands.get(interaction.commandName);
-  if (!command) return;
-  try {
-    await command.execute(interaction);
-  } catch (err) {
-    console.error(err);
-    await interaction.reply({ content: '❌ Error executing command', ephemeral: true });
-  }
-});
+@tree.command(name="profile", description="📊 Your stats")
+async def profile(interaction: discord.Interaction):
+    uid = str(interaction.user.id)
+    init_player(uid)
+    p = user_data[uid]
+    embed = discord.Embed(title="📊 Profile", color=0xffa500)
+    embed.add_field(name="⚔️", value=p["level"], inline=True)
+    embed.add_field(name="⭐", value=f"{p['xp']}", inline=True)
+    embed.add_field(name="💰", value=f"{p['bones']}", inline=True)
+    await interaction.response.send_message(embed=embed)
 
-// ====== Login ======
-client.login(process.env.MTQ2Nzc4NzI4ODIzMzY0MDAzMw.GD_O4U.kWCbEY9RXokgOt9KMZUxq1s6A3Zk8WO-gSpxsc);
+@tree.command(name="hunt", description="🏹 Hunt for loot!")
+async def hunt(interaction: discord.Interaction):
+    uid = str(interaction.user.id)
+    init_player(uid)
+    now = datetime.now().timestamp()
+    if now - user_data[uid]["hunt_last"] < 3600:
+        await interaction.response.send_message("⏰ 1h cooldown!")
+        return
+    bones = random.randint(20,80)
+    user_data[uid]["bones"] += bones
+    user_data[uid]["hunt_last"] = now
+    save_data()
+    if random.random() < 0.15:
+        pet = random.choice(["🐩 Fluffy", "🐶 Big Woof"])
+        user_data[uid]["pets"].append(pet)
+        save_data()
+        await interaction.response.send_message(f"🏹 +{bones} bones + {pet}!")
+    else:
+        await interaction.response.send_message(f"🏹 +{bones} bones!")
+
+@tree.command(name="fight", description="⚔️ Fight for XP!")
+async def fight(interaction: discord.Interaction):
+    uid = str(interaction.user.id)
+    init_player(uid)
+    if random.random() < 0.7:
+        xp = random.randint(20,50)
+        user_data[uid]["xp"] += xp
+        save_data()
+        await interaction.response.send_message(f"✅ Victory! +{xp} XP")
+    else:
+        await interaction.response.send_message("💥 Defeat! Try again!")
+
+bot.run(os.getenv('MTQ2Nzc4NzI4ODIzMzY0MDAzMw.GR608-.Ux1g5oQUVmsgGGuHq5RjP2aUVTp1-k0PukETN0'))
